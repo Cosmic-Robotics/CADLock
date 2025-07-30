@@ -2,6 +2,11 @@
 REM start_tray_monitor.bat
 title CAD Lock System Tray Setup
 
+REM Load INSTALL_DIR from .env file
+for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+    if /i "%%A"=="INSTALL_DIR" set "INSTALL_DIR=%%B"
+)
+
 echo =============================================
 echo    CAD Lock System Tray Monitor
 echo =============================================
@@ -9,7 +14,7 @@ echo.
 echo Installing to system tray...
 echo.
 
-cd /d "C:\Users\brams\OneDrive\Desktop\CAD Lock"
+cd /d "%INSTALL_DIR%"
 
 REM Install required packages
 echo Checking/installing required packages...
