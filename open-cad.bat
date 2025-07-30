@@ -29,8 +29,8 @@ REM echo Running: python "%INSTALL_PATH%" open "%~1"
 REM -- If a file is passed, open it using the Python script
 if not "%~1"=="" (
   python "%INSTALL_PATH%" open "%~1"
-  pause
+REM  pause
 ) else (
   echo Usage: open-cad.bat "full\path\to\file.sldprt"
-  pause
+REM pause
 )
