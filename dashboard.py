@@ -6,12 +6,31 @@ from flask import Flask, render_template_string, jsonify
 from pathlib import Path
 import threading
 
+# Load environment variables
+def load_env_file():
+    """Load environment variables from .env file"""
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
+
+# Load .env file first
+load_env_file()
+
 app = Flask(__name__)
 
 class LockDashboard:
     def __init__(self):
-        self.lock_dir = r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks"
-        self.cad_root = r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data"
+        # Get paths from environment variables
+        self.lock_dir = os.getenv('LOCK_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks")
+        self.cad_root = os.getenv('CAD_ROOT_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data")
+        
+        # Get settings
+        self.cleanup_max_hours = int(os.getenv('CLEANUP_MAX_HOURS', '24'))
     
     def get_all_locks(self):
         """Get all current lock files and their information"""
@@ -79,8 +98,11 @@ class LockDashboard:
         locks.sort(key=lambda x: x['lock_time_obj'], reverse=True)
         return locks
     
-    def cleanup_stale_locks(self, max_hours=24):
+    def cleanup_stale_locks(self, max_hours=None):
         """Remove lock files older than specified hours"""
+        if max_hours is None:
+            max_hours = self.cleanup_max_hours
+            
         removed_count = 0
         
         if not os.path.exists(self.lock_dir):
@@ -336,7 +358,7 @@ HTML_TEMPLATE = """
         let refreshInterval;
         
         function startAutoRefresh() {
-            refreshInterval = setInterval(refreshData, 30000); // Refresh every 30 seconds
+            refreshInterval = setInterval(refreshData, 10000); // Refresh every 10 seconds
         }
         
         function refreshData() {
@@ -358,6 +380,29 @@ HTML_TEMPLATE = """
         function updateDashboard(data) {
             // Update stats
             document.querySelector('.stat-number').textContent = data.locks.length;
+            
+            // Update current time
+            const now = new Date();
+            const timeElements = document.querySelectorAll('.stat-number');
+            if (timeElements[1]) {
+                timeElements[1].textContent = now.toLocaleTimeString('en-US', { 
+                    hour: '2-digit', 
+                    minute: '2-digit',
+                    hour12: false 
+                });
+            }
+            if (timeElements[2]) {
+                timeElements[2].textContent = now.toLocaleDateString('en-US', { 
+                    month: '2-digit', 
+                    day: '2-digit' 
+                });
+            }
+            
+            // Update refresh info timestamp
+            const refreshInfo = document.querySelector('.refresh-info');
+            if (refreshInfo) {
+                refreshInfo.innerHTML = `🔄 Auto-refreshes every 10 seconds | Last updated: ${now.toLocaleTimeString()}`;
+            }
             
             // Update locks list
             const locksContainer = document.querySelector('.locks-container');
@@ -463,7 +508,7 @@ HTML_TEMPLATE = """
         </div>
         
         <div class="refresh-info">
-            🔄 Auto-refreshes every 30 seconds | Last updated: {{ current_time.strftime('%H:%M:%S') }}
+            🔄 Auto-refreshes every 10 seconds | Last updated: {{ current_time.strftime('%H:%M:%S') }}
         </div>
         
         <div class="locks-container">
@@ -541,12 +586,18 @@ def api_cleanup():
 
 def run_server():
     """Run the Flask server"""
+    # Get server settings from environment
+    host = os.getenv('DASHBOARD_HOST', '0.0.0.0')
+    port = int(os.getenv('DASHBOARD_PORT', '5000'))
+    
     print("Starting CAD Lock Dashboard...")
-    print("Dashboard will be available at: http://localhost:5000")
+    print(f"Dashboard will be available at: http://localhost:{port}")
+    if host == '0.0.0.0':
+        print(f"Network access available at: http://your-ip:{port}")
     print("Press Ctrl+C to stop the server")
     
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+        app.run(host=host, port=port, debug=False, use_reloader=False)
     except KeyboardInterrupt:
         print("\nServer stopped by user")
     except Exception as e:

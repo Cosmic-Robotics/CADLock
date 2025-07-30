@@ -8,13 +8,34 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+# Load environment variables
+def load_env_file():
+    """Load environment variables from .env file"""
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
+
+# Load .env file first
+load_env_file()
+
 class CADLockManager:
     def __init__(self):
-        self.user = os.getenv('USERNAME') or os.getenv('USER')
-        self.computer = os.getenv('COMPUTERNAME') or os.getenv('HOSTNAME')
-        self.lock_dir = r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks"
-        self.cad_root = r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data"
-        self.solidworks_path = r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe"
+        self.user = os.getenv('USER_OVERRIDE') or os.getenv('USERNAME') or os.getenv('USER')
+        self.computer = os.getenv('COMPUTER_OVERRIDE') or os.getenv('COMPUTERNAME') or os.getenv('HOSTNAME')
+        
+        # Get paths from environment variables
+        self.lock_dir = os.getenv('LOCK_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks")
+        self.cad_root = os.getenv('CAD_ROOT_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data")
+        self.solidworks_path = os.getenv('SOLIDWORKS_PATH', r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe")
+        
+        # Get settings from environment variables
+        self.cleanup_max_hours = int(os.getenv('CLEANUP_MAX_HOURS', '24'))
+        self.monitor_interval = int(os.getenv('MONITOR_INTERVAL', '10'))
         
         # Auto-monitoring
         self.auto_monitor_running = False
@@ -22,6 +43,22 @@ class CADLockManager:
         
         # Create lock directory if it doesn't exist
         os.makedirs(self.lock_dir, exist_ok=True)
+        
+        # Validate critical paths
+        self._validate_paths()
+    
+    def _validate_paths(self):
+        """Validate that required paths exist and are accessible"""
+        if not os.path.exists(self.cad_root):
+            print(f"Warning: CAD root directory not found: {self.cad_root}")
+            print("Please update CAD_ROOT_DIR in your .env file")
+        
+        if not os.path.exists(self.solidworks_path):
+            print(f"Warning: SolidWorks executable not found: {self.solidworks_path}")
+            print("Please update SOLIDWORKS_PATH in your .env file")
+            print("Common paths:")
+            print("  C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe")
+            print("  C:\\Program Files (x86)\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe")
     
     def is_solidworks_running(self):
         """Check if SolidWorks is running"""
@@ -161,18 +198,77 @@ class CADLockManager:
         """Open SolidWorks with the specified file"""
         try:
             if read_only:
-                # Open in read-only mode (hidden window)
-                subprocess.Popen([self.solidworks_path, "/r", file_path], 
-                               creationflags=subprocess.CREATE_NO_WINDOW)
                 print(f"Opening in READ-ONLY mode: {os.path.basename(file_path)}")
+                
+                # Create temporary read-only copy - most reliable method
+                import shutil
+                import tempfile
+                
+                # Create temp directory for read-only files
+                temp_base = os.path.join(tempfile.gettempdir(), "CAD_ReadOnly")
+                os.makedirs(temp_base, exist_ok=True)
+                
+                # Create unique filename with READONLY prefix
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                base_name = os.path.splitext(os.path.basename(file_path))[0]
+                extension = os.path.splitext(file_path)[1]
+                temp_filename = f"READONLY_{base_name}_{timestamp}{extension}"
+                temp_file = os.path.join(temp_base, temp_filename)
+                
+                # Copy file to temp location
+                shutil.copy2(file_path, temp_file)
+                
+                # Set file as read-only (Windows)
+                import stat
+                os.chmod(temp_file, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
+                
+                print(f"Created read-only copy: {temp_filename}")
+                print(f"Temp file location: {temp_file}")
+                
+                # Show additional message about read-only mode
+                try:
+                    import tkinter as tk
+                    from tkinter import messagebox
+                    
+                    root = tk.Tk()
+                    root.withdraw()
+                    
+                    message = f"Opening READ-ONLY copy:\n\n"
+                    message += f"Original: {os.path.basename(file_path)}\n"
+                    message += f"Read-only copy: {temp_filename}\n\n"
+                    message += f"This file CANNOT be saved or modified.\n"
+                    message += f"Any changes will be lost when you close SolidWorks."
+                    
+                    messagebox.showinfo("Read-Only Mode", message)
+                    root.destroy()
+                except:
+                    print("=" * 50)
+                    print("READ-ONLY MODE ACTIVE")
+                    print("=" * 50)
+                    print(f"Original: {os.path.basename(file_path)}")
+                    print(f"Read-only copy: {temp_filename}")
+                    print("This file CANNOT be saved or modified!")
+                    print("Any changes will be lost when you close SolidWorks.")
+                    print("=" * 50)
+                    time.sleep(3)
+                
+                # Open the read-only copy
+                subprocess.Popen([self.solidworks_path, temp_file])
+                
             else:
-                # Open normally (hidden window)
-                subprocess.Popen([self.solidworks_path, file_path],
-                               creationflags=subprocess.CREATE_NO_WINDOW)
+                # Open normally
+                subprocess.Popen([self.solidworks_path, file_path])
                 print(f"Opening normally: {os.path.basename(file_path)}")
+                
         except Exception as e:
             print(f"Error opening SolidWorks: {e}")
             print(f"Verify SolidWorks path: {self.solidworks_path}")
+            # Fallback: try to open original file anyway
+            try:
+                subprocess.Popen([self.solidworks_path, file_path])
+                print("Fallback: Opened original file")
+            except:
+                pass
     
     def cleanup_stale_locks(self, max_hours=24, force_cleanup_my_locks=False):
         """Remove old lock files and optionally all auto-created locks"""
@@ -388,7 +484,45 @@ if __name__ == "__main__":
         lock_info = manager.check_lock(file_path)
         
         if lock_info and lock_info['user'] != manager.user:
-            # File is locked by someone else - open read-only
+            # File is locked by someone else - show message and open read-only
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+                
+                # Create hidden root window
+                root = tk.Tk()
+                root.withdraw()
+                
+                # Show message box
+                message = f"File is currently locked!\n\n"
+                message += f"File: {os.path.basename(file_path)}\n"
+                message += f"Locked by: {lock_info['user']}\n"
+                message += f"Computer: {lock_info['computer']}\n"
+                message += f"Since: {lock_info['timestamp']}\n\n"
+                message += f"The file will open in READ-ONLY mode."
+                
+                messagebox.showwarning("File Locked - CAD Lock System", message)
+                root.destroy()
+                
+            except ImportError:
+                # Fallback: Use Windows msg command if tkinter not available
+                try:
+                    message = f"File Locked!\\n\\nFile: {os.path.basename(file_path)}\\nLocked by: {lock_info['user']}\\nComputer: {lock_info['computer']}\\nSince: {lock_info['timestamp']}\\n\\nOpening in READ-ONLY mode."
+                    subprocess.run(['msg', '*', message], shell=True, timeout=10)
+                except:
+                    # Final fallback: Console message
+                    print("=" * 50)
+                    print("FILE IS LOCKED!")
+                    print("=" * 50)
+                    print(f"File: {os.path.basename(file_path)}")
+                    print(f"Locked by: {lock_info['user']}")
+                    print(f"Computer: {lock_info['computer']}")
+                    print(f"Since: {lock_info['timestamp']}")
+                    print("Opening in READ-ONLY mode...")
+                    print("=" * 50)
+                    time.sleep(3)
+            
+            # Open in read-only mode
             manager.open_solidworks(file_path, read_only=True)
         else:
             # File is not locked or locked by current user - create lock and open normally

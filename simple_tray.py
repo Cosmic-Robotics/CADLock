@@ -8,13 +8,33 @@ import psutil
 import pystray
 from PIL import Image, ImageDraw
 
+# Load environment variables
+def load_env_file():
+    """Load environment variables from .env file"""
+    env_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(env_path):
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    os.environ[key] = value
+
+# Load .env file first
+load_env_file()
+
 # Simple version - easier to debug
 class SimpleCADTray:
     def __init__(self):
-        self.user = os.getenv('USERNAME')
-        self.computer = os.getenv('COMPUTERNAME')
-        self.lock_dir = r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks"
-        self.cad_root = r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data"
+        self.user = os.getenv('USER_OVERRIDE') or os.getenv('USERNAME')
+        self.computer = os.getenv('COMPUTER_OVERRIDE') or os.getenv('COMPUTERNAME')
+        
+        # Get paths from environment variables
+        self.lock_dir = os.getenv('LOCK_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks")
+        self.cad_root = os.getenv('CAD_ROOT_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data")
+        
+        # Get settings
+        self.monitor_interval = int(os.getenv('MONITOR_INTERVAL', '10'))
         
         self.monitor_running = False
         self.monitor_thread = None
@@ -24,6 +44,14 @@ class SimpleCADTray:
         os.makedirs(self.lock_dir, exist_ok=True)
         
         print(f"SimpleCADTray initialized for user: {self.user}")
+        self._validate_paths()
+    
+    def _validate_paths(self):
+        """Validate that required paths exist"""
+        if not os.path.exists(self.cad_root):
+            print(f"Warning: CAD root directory not found: {self.cad_root}")
+        if not os.path.exists(self.lock_dir):
+            print(f"Creating lock directory: {self.lock_dir}")
     
     def create_simple_icon(self, lock_count=0):
         """Create a very simple icon"""

@@ -1,0 +1,39 @@
+# CAD Lock System - Git Ignore File
+
+# Environment configuration (contains sensitive paths)
+.env
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environment
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Lock files (don't commit actual locks)
+*.lock
+
+# Test files
+test_*
+debug_*
