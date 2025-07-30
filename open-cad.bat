@@ -2,8 +2,10 @@
 REM -- Move into script folder (so .env is found) --
 pushd "%~dp0"
 
-REM -- Grab everything after “INSTALL_DIR=” in .env --
-for /f "tokens=2* delims==" %%I in ('findstr /b "INSTALL_DIR=" .env') do set "INSTALL_DIR=%%J"
+REM -- Grab INSTALL_DIR from .env --
+for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
+    if /i "%%A"=="INSTALL_DIR" set "INSTALL_DIR=%%B"
+)
 
 popd
 
@@ -20,7 +22,10 @@ if "%INSTALL_DIR:~-1%"=="\" (
   set "INSTALL_PATH=%INSTALL_DIR%\main.py"
 )
 
-REM -- Call your Python script --
-python "%INSTALL_PATH%"
-
-open "%~1"
+REM -- If a file is passed, open it using the Python script
+if not "%~1"=="" (
+  python "%INSTALL_PATH%" open "%~1"
+) else (
+  echo Usage: open-cad.bat "full\path\to\file.sldprt"
+  pause
+)
