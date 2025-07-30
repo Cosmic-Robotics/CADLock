@@ -8,27 +8,12 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Load environment variables
-def load_env_file():
-    """Load environment variables from .env file"""
-    env_path = os.path.join(os.path.dirname(__file__), '.env')
-    if os.path.exists(env_path):
-        with open(env_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, value = line.split('=', 1)
-                    os.environ[key] = value
-
-# Load .env file first
-load_env_file()
-
 class CADLockManager:
     def __init__(self):
         self.user = os.getenv('USER_OVERRIDE') or os.getenv('USERNAME') or os.getenv('USER')
         self.computer = os.getenv('COMPUTER_OVERRIDE') or os.getenv('COMPUTERNAME') or os.getenv('HOSTNAME')
         
-        # Get paths from environment variables
+        # Get paths from environment variables (set by config.bat) (set by config.bat)
         self.lock_dir = os.getenv('LOCK_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks")
         self.cad_root = os.getenv('CAD_ROOT_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data")
         self.solidworks_path = os.getenv('SOLIDWORKS_PATH', r"C:\Program Files\SOLIDWORKS Corp\SOLIDWORKS\SLDWORKS.exe")
@@ -51,11 +36,11 @@ class CADLockManager:
         """Validate that required paths exist and are accessible"""
         if not os.path.exists(self.cad_root):
             print(f"Warning: CAD root directory not found: {self.cad_root}")
-            print("Please update CAD_ROOT_DIR in your .env file")
+            print("Please update CAD_ROOT_DIR in your config.bat file")
         
         if not os.path.exists(self.solidworks_path):
             print(f"Warning: SolidWorks executable not found: {self.solidworks_path}")
-            print("Please update SOLIDWORKS_PATH in your .env file")
+            print("Please update SOLIDWORKS_PATH in your config.bat file")
             print("Common paths:")
             print("  C:\\Program Files\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe")
             print("  C:\\Program Files (x86)\\SOLIDWORKS Corp\\SOLIDWORKS\\SLDWORKS.exe")

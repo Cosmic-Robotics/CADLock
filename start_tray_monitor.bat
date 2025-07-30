@@ -2,15 +2,14 @@
 REM start_tray_monitor.bat
 title CAD Lock System Tray Setup
 
-REM Load INSTALL_DIR from .env file
-for /f "usebackq tokens=1,* delims==" %%A in (".env") do (
-    if /i "%%A"=="INSTALL_DIR" set "INSTALL_DIR=%%B"
-)
+REM Load configuration
+call "%~dp0config.bat"
 
 echo =============================================
 echo    CAD Lock System Tray Monitor
 echo =============================================
 echo.
+echo Install Directory: %INSTALL_DIR%
 echo Installing to system tray...
 echo.
 
