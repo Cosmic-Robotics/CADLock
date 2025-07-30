@@ -161,12 +161,14 @@ class CADLockManager:
         """Open SolidWorks with the specified file"""
         try:
             if read_only:
-                # Open in read-only mode
-                subprocess.Popen([self.solidworks_path, "/r", file_path])
+                # Open in read-only mode (hidden window)
+                subprocess.Popen([self.solidworks_path, "/r", file_path], 
+                               creationflags=subprocess.CREATE_NO_WINDOW)
                 print(f"Opening in READ-ONLY mode: {os.path.basename(file_path)}")
             else:
-                # Open normally
-                subprocess.Popen([self.solidworks_path, file_path])
+                # Open normally (hidden window)
+                subprocess.Popen([self.solidworks_path, file_path],
+                               creationflags=subprocess.CREATE_NO_WINDOW)
                 print(f"Opening normally: {os.path.basename(file_path)}")
         except Exception as e:
             print(f"Error opening SolidWorks: {e}")
@@ -409,5 +411,6 @@ if __name__ == "__main__":
         print(f"Unknown action: {action}")
         show_usage()
         
-    # Keep window open briefly so user can see the output
-    time.sleep(2)
+    # Keep window open briefly so user can see the output (but hidden)
+    if action not in ["start-monitor", "stop-monitor"]:
+        time.sleep(1)  # Reduced from 2 seconds and only for non-monitor actions
