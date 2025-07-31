@@ -4,6 +4,9 @@ accept read only
 make sujre google drive is running
 intercept and block saves
 psutil pip install watchdog
+pip install pystray pillow psutil
+
+naming error where two users have a lock so it creates lock and lock(1)
 
 
 ## 📁 File Overview

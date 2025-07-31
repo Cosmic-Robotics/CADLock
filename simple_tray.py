@@ -9,10 +9,6 @@ import pystray
 from PIL import Image, ImageDraw
 import tkinter as tk
 from tkinter import messagebox
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler
-import tkinter as tk
-from tkinter import messagebox
 
 # Simple version with collision detection
 class SimpleCADTray:
@@ -20,7 +16,7 @@ class SimpleCADTray:
         self.user = os.getenv('USER_OVERRIDE') or os.getenv('USERNAME')
         self.computer = os.getenv('COMPUTER_OVERRIDE') or os.getenv('COMPUTERNAME')
         
-        # Get paths from environment variables (set by config.bat) (set by config.bat)
+        # Get paths from environment variables (set by config.bat)
         self.lock_dir = os.getenv('LOCK_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data\Locks")
         self.cad_root = os.getenv('CAD_ROOT_DIR', r"G:\Shared drives\Cosmic\Engineering\50 - CAD Data")
         
@@ -37,9 +33,6 @@ class SimpleCADTray:
         # Collision animation state
         self.collision_active = False
         self.animation_thread = None
-        
-        # Track files we've already warned about to avoid spam
-        self.warned_files = set()
         
         # Ensure directories exist
         os.makedirs(self.lock_dir, exist_ok=True)
@@ -218,33 +211,11 @@ class SimpleCADTray:
         if self.collision_active:
             self.update_icon(warning=True)
     
-    def try_close_file_in_solidworks(self, file_path):
-        """Try to close the file in SolidWorks using COM automation"""
-        try:
-            import win32com.client
-            
-            # Try to connect to SolidWorks
-            sw = win32com.client.Dispatch("SldWorks.Application")
-            
-            # Get the active document
-            doc = sw.GetFirstDocument()
-            while doc:
-                doc_path = doc.GetPathName()
-                if doc_path.lower() == file_path.lower():
-                    # Close this document
-                    sw.CloseDoc(doc.GetTitle())
-                    self.log_message(f"Closed {os.path.basename(file_path)} in SolidWorks")
-                    break
-                doc = doc.GetNext()
-                
-        except Exception as e:
-            self.log_message(f"Could not close file in SolidWorks: {e}")
-            # This is expected if SolidWorks COM isn't available
-    
     def check_for_collisions(self, open_files):
-        """Check if any of my open files are locked by others"""
+        """Check for ALL collision scenarios"""
         collisions_found = False
         
+        # Scenario 1: I'm editing a file locked by someone else
         for file_path in open_files:
             lock_info = self.get_lock_info(file_path)
             
@@ -261,412 +232,184 @@ class SimpleCADTray:
                         self.warned_files.add(file_path)
                         collisions_found = True
                     
-                    self.log_message(f"COLLISION: {filename} locked by {locked_by}")
+                    self.log_message(f"COLLISION TYPE 1: {filename} locked by {locked_by}")
         
-        return collisions_found
-    
-    def check_save_attempt(self, file_path):
-        """Check if user is trying to save a locked file"""
-        try:
-            lock_info = self.get_lock_info(file_path)
-            
-            if lock_info:
-                locked_by = lock_info.get('user')
-                
-                # If file is locked by someone else
-                if locked_by and locked_by != self.user:
-                    self.show_save_blocked_warning(file_path, lock_info)
-                    # Immediately make file read-only to prevent further saves
-                    self.make_file_readonly_permanently(file_path, lock_info)
-                    return True
-                    
-        except Exception as e:
-            self.log_message(f"Error checking save attempt: {e}")
-        return False
-    
-    def make_file_readonly_permanently(self, file_path, lock_info):
-        """Make file read-only and keep a file handle open to prevent writing"""
-        try:
-            import stat
-            
-            # First, try to make file read-only
-            os.chmod(file_path, stat.S_IREAD | stat.S_IRGRP | stat.S_IROTH)
-            
-            # More aggressive: Try to keep file handle open for reading to prevent writing
-            try:
-                file_handle = open(file_path, 'rb')
-                # Store handle so it stays open
-                if not hasattr(self, 'blocked_files'):
-                    self.blocked_files = {}
-                self.blocked_files[file_path] = file_handle
-                
-                self.log_message(f"Blocked file handle for {os.path.basename(file_path)}")
-            except Exception as e:
-                self.log_message(f"Could not open file handle for {file_path}: {e}")
-            
-            # Store in lock data
-            lock_path = self.get_lock_path_from_file(file_path)
-            if os.path.exists(lock_path):
-                with open(lock_path, 'r') as f:
-                    lock_data = json.load(f)
-                
-                lock_data['made_readonly_by_collision'] = True
-                lock_data['blocked_timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                with open(lock_path, 'w') as f:
-                    json.dump(lock_data, f, indent=2)
-            
-            self.log_message(f"Made {os.path.basename(file_path)} read-only due to lock conflict")
-            
-        except Exception as e:
-            self.log_message(f"Error setting readonly: {e}")
-    
-    def release_blocked_files(self):
-        """Release any blocked file handles"""
-        try:
-            if hasattr(self, 'blocked_files'):
-                for file_path, handle in list(self.blocked_files.items()):
-                    try:
-                        handle.close()
-                        del self.blocked_files[file_path]
-                        
-                        # Restore normal permissions
-                        import stat
-                        os.chmod(file_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IRGRP | stat.S_IWGRP)
-                        
-                        self.log_message(f"Released block on {os.path.basename(file_path)}")
-                    except:
-                        pass
-        except Exception as e:
-            self.log_message(f"Error releasing blocked files: {e}")
-    
-    def protect_all_locked_files(self):
-        """Proactively protect all files that are locked by others"""
-        try:
-            if not os.path.exists(self.lock_dir):
-                return
-                
-            for lock_file in os.listdir(self.lock_dir):
-                if lock_file.endswith('.lock'):
-                    lock_path = os.path.join(self.lock_dir, lock_file)
-                    try:
-                        with open(lock_path, 'r') as f:
-                            lock_data = json.load(f)
-                        
-                        locked_by = lock_data.get('user')
-                        original_path = lock_data.get('original_path')
-                        
-                        # If file is locked by someone else and exists
-                        if (locked_by and locked_by != self.user and 
-                            original_path and os.path.exists(original_path)):
-                            
-                            # More aggressive: Move file to hidden location
-                            self.hide_locked_file(original_path, lock_data)
-                                    
-                    except Exception as e:
-                        self.log_message(f"Error processing lock file {lock_file}: {e}")
-                        
-        except Exception as e:
-            self.log_message(f"Error in protect_all_locked_files: {e}")
-    
-    def hide_locked_file(self, file_path, lock_data):
-        """Move locked file to hidden location to prevent access"""
-        try:
-            if not hasattr(self, 'hidden_files'):
-                self.hidden_files = {}
-            
-            # If already hidden, skip
-            if file_path in self.hidden_files:
-                return
-                
-            # Create hidden directory
-            hidden_dir = os.path.join(os.path.dirname(file_path), ".cad_lock_hidden")
-            os.makedirs(hidden_dir, exist_ok=True)
-            
-            # Move file to hidden location
-            filename = os.path.basename(file_path)
-            hidden_path = os.path.join(hidden_dir, filename)
-            
-            # If hidden file already exists, use timestamp suffix
-            if os.path.exists(hidden_path):
-                name, ext = os.path.splitext(filename)
-                timestamp = datetime.now().strftime("%H%M%S")
-                hidden_path = os.path.join(hidden_dir, f"{name}_{timestamp}{ext}")
-            
-            # Move the file
-            import shutil
-            shutil.move(file_path, hidden_path)
-            
-            # Track the move
-            self.hidden_files[file_path] = {
-                'hidden_path': hidden_path,
-                'locked_by': lock_data.get('user'),
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            self.log_message(f"HIDDEN: {filename} locked by {lock_data.get('user')} - moved to hidden location")
-            
-        except Exception as e:
-            self.log_message(f"Error hiding file {file_path}: {e}")
-    
-    def restore_hidden_files(self):
-        """Restore any hidden files when locks are released"""
-        try:
-            if not hasattr(self, 'hidden_files'):
-                return
-                
-            files_to_restore = []
-            
-            for original_path, hide_info in self.hidden_files.items():
-                # Check if file is still locked by someone else
-                lock_info = self.get_lock_info(original_path)
-                
-                if not lock_info or lock_info.get('user') == self.user:
-                    # Lock released or is ours now - restore file
-                    files_to_restore.append(original_path)
-            
-            # Restore files
-            for original_path in files_to_restore:
-                hide_info = self.hidden_files[original_path]
-                hidden_path = hide_info['hidden_path']
-                
-                try:
-                    if os.path.exists(hidden_path):
-                        import shutil
-                        shutil.move(hidden_path, original_path)
-                        self.log_message(f"RESTORED: {os.path.basename(original_path)} - lock released")
-                    
-                    del self.hidden_files[original_path]
-                    
-                except Exception as e:
-                    self.log_message(f"Error restoring {original_path}: {e}")
-                    
-        except Exception as e:
-            self.log_message(f"Error restoring hidden files: {e}")
-    
-    def restore_file_permissions(self, file_path):
-        """Restore normal file permissions"""
-        try:
-            import stat
-            os.chmod(file_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH)
-            self.log_message(f"Restored permissions for {os.path.basename(file_path)}")
-        except Exception as e:
-            self.log_message(f"Error restoring permissions for {file_path}: {e}")
-    
-    def check_for_collisions(self, open_files):
-        """Check if any of my open files are locked by others"""
-        collisions_found = False
-        
-        for file_path in open_files:
-            lock_info = self.get_lock_info(file_path)
-            
-            if lock_info:
-                locked_by = lock_info.get('user')
-                
-                # If file is locked by someone else
-                if locked_by and locked_by != self.user:
-                    filename = os.path.basename(file_path)
-                    
-                    # Show warning every time (remove the "warn once" limitation)
-                    self.show_collision_warning(file_path, lock_info)
-                    collisions_found = True
-                    
-                    self.log_message(f"COLLISION: {filename} locked by {locked_by}")
+        # Scenario 2: Check if multiple people have locks on the same file
+        # This is the crucial line that checks for multiple locks!
+        multiple_locks_found = self.check_for_multiple_locks()
+        collisions_found = collisions_found or multiple_locks_found
         
         # Stop animation if no more collisions
         if not collisions_found and self.collision_active:
             self.stop_collision_animation()
         
         return collisions_found
-    
-    def show_save_prevention_warning(self, file_path, lock_info):
-        """Show additional warning about save prevention"""
+        
+    def check_for_multiple_locks(self):
+        """Check if multiple users have locks on the same file"""
+        conflicts_found = False
+        
         try:
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes('-topmost', True)
+            if not os.path.exists(self.lock_dir):
+                self.log_message("Lock directory doesn't exist - no conflicts possible")
+                return False
             
-            filename = os.path.basename(file_path)
-            locked_by = lock_info.get('user', 'Unknown')
+            # Group locks by file path AND by normalized file path
+            file_locks = {}
             
-            message = f"🚫 SAVE PROTECTION ACTIVATED 🚫\n\n"
-            message += f"File: {filename}\n"
-            message += f"Locked by: {locked_by}\n\n"
-            message += f"This file has been made read-only to prevent\n"
-            message += f"data conflicts. SolidWorks should show this\n"
-            message += f"file as read-only in the title bar.\n\n"
-            message += f"Any save attempts will be blocked until\n"
-            message += f"{locked_by} releases the lock."
+            lock_files = [f for f in os.listdir(self.lock_dir) if f.endswith('.lock')]
+            self.log_message(f"Checking {len(lock_files)} lock files for conflicts")
             
-            messagebox.showinfo(
-                "CAD Lock System - Save Protection", 
-                message
-            )
-            
-            root.destroy()
-            
-        except Exception as e:
-            self.log_message(f"Error showing save prevention warning: {e}")
-    
-    def get_lock_path_from_file(self, file_path):
-        """Get lock file path for a given file"""
-        try:
-            rel_path = os.path.relpath(file_path, self.cad_root)
-            safe_path = rel_path.replace('\\', '_').replace('/', '_').replace(':', '_')
-            safe_path = safe_path.replace('*', '_').replace('?', '_').replace('"', '_')
-            safe_path = safe_path.replace('<', '_').replace('>', '_').replace('|', '_')
-            
-            lock_filename = f"{safe_path}.lock"
-            return os.path.join(self.lock_dir, lock_filename)
-        except:
-            return None
-    
-    def show_save_blocked_warning(self, file_path, lock_info):
-        """Show warning that save is blocked"""
-        try:
-            root = tk.Tk()
-            root.withdraw()
-            root.attributes('-topmost', True)
-            
-            filename = os.path.basename(file_path)
-            locked_by = lock_info.get('user', 'Unknown')
-            locked_since = lock_info.get('timestamp', 'Unknown')
-            
-            message = f"🚫 SAVE BLOCKED 🚫\n\n"
-            message += f"Cannot save file: {filename}\n\n"
-            message += f"File is locked by: {locked_by}\n"
-            message += f"Since: {locked_since}\n\n"
-            message += f"Your changes cannot be saved while the file is locked.\n"
-            message += f"Contact {locked_by} to coordinate access."
-            
-            messagebox.showerror(
-                "CAD Lock System - Save Blocked", 
-                message
-            )
-            
-            root.destroy()
-            
-            self.log_message(f"SAVE BLOCKED: {filename} locked by {locked_by}")
-            
-        except Exception as e:
-            self.log_message(f"Error showing save blocked warning: {e}")
-    
-    def make_file_readonly_temporarily(self, file_path):
-        """Temporarily make file read-only to prevent save"""
-        try:
-            import stat
-            # Make file read-only for 5 seconds
-            current_mode = os.stat(file_path).st_mode
-            os.chmod(file_path, stat.S_IREAD)
-            
-            # Restore permissions after 5 seconds
-            def restore_permissions():
+            for lock_file in lock_files:
+                lock_path = os.path.join(self.lock_dir, lock_file)
                 try:
-                    time.sleep(5)
-                    os.chmod(file_path, current_mode)
-                    self.log_message(f"Restored permissions for {os.path.basename(file_path)}")
-                except:
-                    pass
-            
-            threading.Thread(target=restore_permissions, daemon=True).start()
-            
-        except Exception as e:
-            self.log_message(f"Error setting readonly: {e}")
-    
-    def make_locked_files_readonly(self):
-        """Make all files locked by others read-only"""
-        try:
-            open_files = self.find_open_files()
-            
-            for file_path in open_files:
-                lock_info = self.get_lock_info(file_path)
-                
-                if lock_info:
-                    locked_by = lock_info.get('user')
+                    with open(lock_path, 'r') as f:
+                        lock_data = json.load(f)
                     
-                    # If file is locked by someone else, make it read-only
-                    if locked_by and locked_by != self.user:
-                        self.make_file_readonly_permanently(file_path, lock_info)
+                    original_path = lock_data.get('original_path', '')
+                    user = lock_data.get('user', '')
+                    
+                    if original_path and user:
+                        # Normalize the path to catch different representations of same file
+                        normalized_path = os.path.normpath(original_path.lower())
+                        
+                        # Use both original and normalized paths as keys
+                        for key in [original_path, normalized_path]:
+                            if key not in file_locks:
+                                file_locks[key] = []
+                            file_locks[key].append({
+                                'user': user,
+                                'lock_file': lock_file,
+                                'original_path': original_path,
+                                'data': lock_data
+                            })
+                        
+                        self.log_message(f"Found lock: {os.path.basename(original_path)} by {user}")
+                            
+                except Exception as e:
+                    self.log_message(f"Error reading lock file {lock_file}: {e}")
+                    continue
+            
+            # Check for files with multiple locks
+            checked_files = set()
+            for file_path, locks in file_locks.items():
+                if file_path in checked_files:
+                    continue
+                    
+                if len(locks) > 1:
+                    # Remove duplicates (same user might appear multiple times due to normalization)
+                    unique_users = {}
+                    for lock in locks:
+                        user = lock['user']
+                        if user not in unique_users:
+                            unique_users[user] = lock
+                    
+                    if len(unique_users) > 1:
+                        # Multiple people have this file locked!
+                        users = list(unique_users.keys())
+                        filename = os.path.basename(file_path)
+                        
+                        self.log_message(f"CONFLICT DETECTED: {filename} locked by multiple users: {', '.join(users)}")
+                        
+                        # ALWAYS start animation when ANY collision is detected
+                        self.start_collision_animation()
+                        conflicts_found = True
+                        
+                        # Mark this file as checked to avoid duplicate processing
+                        checked_files.add(file_path)
+                        for lock in locks:
+                            checked_files.add(lock['original_path'])
+                            checked_files.add(os.path.normpath(lock['original_path'].lower()))
+                        
+                        # Show popup warning only if we're one of the users involved
+                        if self.user in users:
+                            other_users = [u for u in users if u != self.user]
+                            self.show_multiple_lock_warning(file_path, other_users)
+                        else:
+                            # We're not involved, but still show a notification about the conflict
+                            self.log_message(f"CONFLICT (not involving me): {filename} locked by {', '.join(users)}")
+                            
+                            # Optionally, show a different warning for conflicts not involving us
+                            self.show_conflict_notification(file_path, users)
                         
         except Exception as e:
-            self.log_message(f"Error making locked files readonly: {e}")
-    
-    def start_file_watcher(self):
-        """Start file system watcher for save interception"""
-        try:
-            if self.file_observer is None:
-                self.save_handler = SaveInterceptHandler(self)
-                self.file_observer = Observer()
-                self.file_observer.schedule(self.save_handler, self.cad_root, recursive=True)
-                self.file_observer.start()
-                self.log_message("File system watcher started for save interception")
-        except Exception as e:
-            self.log_message(f"Error starting file watcher: {e}")
-    
-    def stop_file_watcher(self):
-        """Stop file system watcher"""
-        try:
-            if self.file_observer:
-                self.file_observer.stop()
-                self.file_observer.join()
-                self.file_observer = None
-                self.save_handler = None
-                self.log_message("File system watcher stopped")
-        except Exception as e:
-            self.log_message(f"Error stopping file watcher: {e}")
-    
-    def get_lock_info(self, file_path):
-        """Get lock information for a specific file"""
-        try:
-            # Generate lock path like main.py does
-            rel_path = os.path.relpath(file_path, self.cad_root)
-            safe_path = rel_path.replace('\\', '_').replace('/', '_').replace(':', '_')
-            safe_path = safe_path.replace('*', '_').replace('?', '_').replace('"', '_')
-            safe_path = safe_path.replace('<', '_').replace('>', '_').replace('|', '_')
+            self.log_message(f"Error in check_for_multiple_locks: {e}")
             
-            lock_filename = f"{safe_path}.lock"
-            lock_path = os.path.join(self.lock_dir, lock_filename)
+        if not conflicts_found:
+            self.log_message("No multiple lock conflicts found")
             
-            if os.path.exists(lock_path):
-                with open(lock_path, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            self.log_message(f"Error checking lock for {file_path}: {e}")
-        return None
+        return conflicts_found
     
-    def show_collision_warning(self, file_path, lock_info):
-        """Show warning dialog for editing collision"""
+    def show_multiple_lock_warning(self, file_path, other_users):
+        """Show warning when multiple users have the same file locked"""
         try:
-            # Create warning dialog
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes('-topmost', True)  # Make sure it appears on top
-            
             filename = os.path.basename(file_path)
-            locked_by = lock_info.get('user', 'Unknown')
-            locked_since = lock_info.get('timestamp', 'Unknown')
             
-            message = f"⚠️ EDITING COLLISION DETECTED ⚠️\n\n"
+            # Start collision animation
+            self.start_collision_animation()
+            
+            # Force the popup to appear on top
+            root = tk.Tk()
+            root.withdraw()
+            root.lift()
+            root.attributes('-topmost', True)
+            root.attributes('-alpha', 0.0)  # Make invisible
+            root.focus_force()
+            
+            message = f"🚨 MULTIPLE LOCKS DETECTED 🚨\n\n"
             message += f"File: {filename}\n"
-            message += f"Locked by: {locked_by}\n"
-            message += f"Since: {locked_since}\n\n"
-            message += f"You are editing a file that is locked by another user!\n"
-            message += f"You will NOT be able to save your changes.\n\n"
-            message += f"Consider closing the file and coordinating with {locked_by}."
+            message += f"Also locked by: {', '.join(other_users)}\n\n"
+            message += f"Multiple people are editing the same file!\n"
+            message += f"This will cause conflicts when saving.\n\n"
+            message += f"Coordinate with {', '.join(other_users)} immediately!"
             
-            # Show warning message
-            messagebox.showwarning(
-                "CAD Lock System - Editing Collision", 
-                message
+            # Use Windows MessageBox for reliability
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, 
+                message, 
+                "CAD Lock System - Multiple Locks!", 
+                0x30  # Warning icon + OK button
             )
             
             root.destroy()
             
-            self.log_message(f"COLLISION WARNING: {filename} locked by {locked_by}")
+            self.log_message(f"MULTIPLE LOCK WARNING SHOWN: {filename} also locked by {', '.join(other_users)}")
             
         except Exception as e:
-            self.log_message(f"Error showing collision warning: {e}")
-    
+            self.log_message(f"Error showing multiple lock warning: {e}")
+            # Fallback to console alert
+            print(f"\n*** MULTIPLE LOCKS WARNING ***")
+            print(f"File: {os.path.basename(file_path)}")
+            print(f"Also locked by: {', '.join(other_users)}")
+            print("******************************\n")
+
+    def show_conflict_notification(self, file_path, users):
+        """Show notification about conflicts between other users"""
+        try:
+            filename = os.path.basename(file_path)
+            
+            # Only show this notification once per conflict
+            conflict_key = f"{filename}:{','.join(sorted(users))}"
+            if not hasattr(self, 'notified_conflicts'):
+                self.notified_conflicts = set()
+            
+            if conflict_key not in self.notified_conflicts:
+                self.notified_conflicts.add(conflict_key)
+                
+                # Update tray icon tooltip to show conflict
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    self.tray_icon.title = f"⚠️ CONFLICT: {filename} locked by {len(users)} users!"
+                
+                # Log the conflict prominently
+                self.log_message(f"*** SYSTEM CONFLICT ALERT ***")
+                self.log_message(f"File: {filename}")
+                self.log_message(f"Locked by: {', '.join(users)}")
+                self.log_message(f"*****************************")
+                
+        except Exception as e:
+            self.log_message(f"Error showing conflict notification: {e}")
+
     def log_message(self, message):
         """Simple logging"""
         timestamp = datetime.now().strftime("%H:%M:%S")
@@ -749,30 +492,6 @@ class SimpleCADTray:
             
         return open_files
     
-    def check_for_collisions(self, open_files):
-        """Check if any of my open files are locked by others"""
-        collisions_found = False
-        
-        for file_path in open_files:
-            lock_info = self.get_lock_info(file_path)
-            
-            if lock_info:
-                locked_by = lock_info.get('user')
-                
-                # If file is locked by someone else
-                if locked_by and locked_by != self.user:
-                    filename = os.path.basename(file_path)
-                    
-                    # Only warn once per file per session
-                    if file_path not in self.warned_files:
-                        self.show_collision_warning(file_path, lock_info)
-                        self.warned_files.add(file_path)
-                        collisions_found = True
-                    
-                    self.log_message(f"COLLISION: {filename} locked by {locked_by}")
-        
-        return collisions_found
-    
     def create_lock(self, file_path):
         """Create lock file"""
         try:
@@ -780,6 +499,7 @@ class SimpleCADTray:
             rel_path = os.path.relpath(file_path, self.cad_root)
             safe_path = rel_path.replace('\\', '_').replace('/', '_').replace(':', '_')
             safe_path = safe_path.replace('*', '_').replace('?', '_').replace('"', '_')
+            safe_path = safe_path.replace('<', '_').replace('>', '_').replace('|', '_')
             lock_filename = f"{safe_path}.lock"
             lock_path = os.path.join(self.lock_dir, lock_filename)
             
@@ -818,6 +538,7 @@ class SimpleCADTray:
             rel_path = os.path.relpath(file_path, self.cad_root)
             safe_path = rel_path.replace('\\', '_').replace('/', '_').replace(':', '_')
             safe_path = safe_path.replace('*', '_').replace('?', '_').replace('"', '_')
+            safe_path = safe_path.replace('<', '_').replace('>', '_').replace('|', '_')
             lock_filename = f"{safe_path}.lock"
             lock_path = os.path.join(self.lock_dir, lock_filename)
             
@@ -876,22 +597,72 @@ class SimpleCADTray:
                     open_files = self.find_open_files()
                     self.log_message(f"Found {len(open_files)} open files")
                     
-                    # Check for collisions FIRST
+                    # Check for collisions FIRST (this includes multiple lock detection)
                     collision_detected = self.check_for_collisions(open_files)
                     
-                    # Make any files locked by others read-only
-                    self.make_locked_files_readonly()
+                    # Even if no collision from open files, check for ANY multiple locks in the system
+                    if not collision_detected:
+                        collision_detected = self.check_for_multiple_locks()
                     
-                    # Create locks for open files (only if not locked by others)
+                    # Create locks for ALL open files - ensure every open file has a lock from me
                     for file_path in open_files:
-                        lock_info = self.get_lock_info(file_path)
+                        # Check if I already have a lock for this file
+                        existing_lock = self.get_lock_info(file_path)
                         
-                        # Only create lock if file isn't locked by someone else
-                        if not lock_info or lock_info.get('user') == self.user:
-                            self.create_lock(file_path)
+                        if not existing_lock or existing_lock.get('user') != self.user:
+                            # I don't have a lock for this file - create one
+                            lock_data = {
+                                'user': self.user,
+                                'computer': self.computer,
+                                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                'file': os.path.basename(file_path),
+                                'original_path': file_path,
+                                'auto_created': True,
+                                'detection_method': 'temp_file_scan'
+                            }
+                            
+                            # Generate lock path
+                            rel_path = os.path.relpath(file_path, self.cad_root)
+                            safe_path = rel_path.replace('\\', '_').replace('/', '_').replace(':', '_')
+                            safe_path = safe_path.replace('*', '_').replace('?', '_').replace('"', '_')
+                            safe_path = safe_path.replace('<', '_').replace('>', '_').replace('|', '_')
+                            lock_filename = f"{safe_path}.lock"
+                            lock_path = os.path.join(self.lock_dir, lock_filename)
+                            
+                            try:
+                                with open(lock_path, 'w') as f:
+                                    json.dump(lock_data, f, indent=2)
+                                
+                                self.log_message(f"AUTO-CREATED LOCK: {os.path.basename(file_path)} (opened via SolidWorks)")
+                                
+                            except Exception as e:
+                                self.log_message(f"Error creating auto-lock for {file_path}: {e}")
+                        else:
+                            # I already have a lock - just update timestamp
+                            try:
+                                rel_path = os.path.relpath(file_path, self.cad_root)
+                                safe_path = rel_path.replace('\\', '_').replace('/', '_').replace(':', '_')
+                                safe_path = safe_path.replace('*', '_').replace('?', '_').replace('"', '_')
+                                safe_path = safe_path.replace('<', '_').replace('>', '_').replace('|', '_')
+                                lock_filename = f"{safe_path}.lock"
+                                lock_path = os.path.join(self.lock_dir, lock_filename)
+                                
+                                if os.path.exists(lock_path):
+                                    with open(lock_path, 'r') as f:
+                                        lock_data = json.load(f)
+                                    
+                                    lock_data['last_seen'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    lock_data['auto_created'] = True
+                                    
+                                    with open(lock_path, 'w') as f:
+                                        json.dump(lock_data, f, indent=2)
+                                        
+                            except Exception as e:
+                                self.log_message(f"Error updating lock timestamp: {e}")
                     
                     # Remove locks for files that are no longer open
                     try:
+                        removed_any = False
                         if os.path.exists(self.lock_dir):
                             for lock_file in os.listdir(self.lock_dir):
                                 if lock_file.endswith('.lock'):
@@ -912,13 +683,41 @@ class SimpleCADTray:
                                                     os.remove(lock_path)
                                                     self.log_message(f"UNLOCKED: {os.path.basename(original_path)}")
                                                     removed_any = True
-                                        else:
-                                            self.log_message(f"Skipping lock - User: {lock_data.get('user')} (me: {self.user}), Auto: {lock_data.get('auto_created')}")
-                                            
                                     except Exception as e:
-                                        self.log_message(f"Error processing lock {lock_file}: {e}")
+                                        # If we can't read the lock file, skip it
+                                        self.log_message(f"Error reading lock file {lock_file}: {e}")
                                         continue
-                            
+                                        
+                        if not removed_any and len(open_files) == 0:
+                            # No open files but we might have locks - remove them all
+                            my_locks = self.get_my_lock_count()
+                            if my_locks > 0:
+                                self.log_message(f"No open files detected but {my_locks} locks remain - removing all auto-locks...")
+                                # Remove all our auto-created locks since no files are open
+                                if os.path.exists(self.lock_dir):
+                                    for lock_file in os.listdir(self.lock_dir):
+                                        if lock_file.endswith('.lock'):
+                                            lock_path = os.path.join(self.lock_dir, lock_file)
+                                            self.log_message(f"Checking lock file: {lock_file}")
+                                            try:
+                                                with open(lock_path, 'r') as f:
+                                                    lock_data = json.load(f)
+                                                
+                                                self.log_message(f"Lock data - User: {lock_data.get('user')}, Auto: {lock_data.get('auto_created')}")
+                                                
+                                                if (lock_data.get('user') == self.user and 
+                                                    lock_data.get('auto_created')):
+                                                    self.log_message(f"Attempting to remove: {lock_path}")
+                                                    os.remove(lock_path)
+                                                    self.log_message(f"UNLOCKED: {lock_data.get('file', 'unknown')} (no temp file)")
+                                                    removed_any = True
+                                                else:
+                                                    self.log_message(f"Skipping lock - User: {lock_data.get('user')} (me: {self.user}), Auto: {lock_data.get('auto_created')}")
+                                                    
+                                            except Exception as e:
+                                                self.log_message(f"Error processing lock {lock_file}: {e}")
+                                                continue
+                                                
                     except Exception as e:
                         self.log_message(f"Error during cleanup: {e}")
                         
@@ -937,8 +736,6 @@ class SimpleCADTray:
                 self.log_message(f"Monitor error: {e}")
                 time.sleep(5)
         
-        self.log_message("Monitor stopped")
-    
     def update_icon(self, warning=False):
         """Update tray icon"""
         try:
