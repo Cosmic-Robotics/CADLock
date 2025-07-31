@@ -34,9 +34,9 @@ class SimpleCADTray:
         # Track files we've already warned about to avoid spam
         self.warned_files = set()
         
-        # File system watcher for save interception
-        self.file_observer = None
-        self.save_handler = None
+        # Collision animation state
+        self.collision_active = False
+        self.animation_thread = None
         
         # Track files we've already warned about to avoid spam
         self.warned_files = set()
@@ -58,7 +58,7 @@ class SimpleCADTray:
         """Create a very simple icon"""
         # Create a simple 32x32 icon
         if warning:
-            image = Image.new('RGBA', (32, 32), (255, 69, 0, 255))  # Orange/red for warning
+            image = Image.new('RGBA', (32, 32), (255, 0, 0, 255))  # Bright red for collision
         else:
             image = Image.new('RGBA', (32, 32), (70, 130, 180, 255))  # Blue background
         draw = ImageDraw.Draw(image)
@@ -72,11 +72,12 @@ class SimpleCADTray:
         
         # Add counter if > 0
         if lock_count > 0:
-            # Red circle in corner
-            draw.ellipse([20, 2, 30, 12], fill=(255, 0, 0, 255))
-            # White number
+            # Different colored circle based on warning state
+            circle_color = (255, 255, 0, 255) if warning else (255, 0, 0, 255)  # Yellow for warning, red for normal
+            draw.ellipse([20, 2, 30, 12], fill=circle_color)
+            # Black number for better contrast
             count_str = str(min(lock_count, 9))  # Single digit only
-            draw.text((23, 4), count_str, fill=(255, 255, 255, 255))
+            draw.text((23, 4), count_str, fill=(0, 0, 0, 255))
         
         return image
     
@@ -119,37 +120,126 @@ class SimpleCADTray:
         return None
     
     def show_collision_warning(self, file_path, lock_info):
-        """Show warning dialog for editing collision"""
+        """Show warning dialog for editing collision - more reliable popup"""
         try:
-            # Create warning dialog
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes('-topmost', True)  # Make sure it appears on top
-            
             filename = os.path.basename(file_path)
             locked_by = lock_info.get('user', 'Unknown')
             locked_since = lock_info.get('timestamp', 'Unknown')
             
-            message = f"⚠️ EDITING COLLISION DETECTED ⚠️\n\n"
-            message += f"File: {filename}\n"
-            message += f"Locked by: {locked_by}\n"
-            message += f"Since: {locked_since}\n\n"
-            message += f"You are editing a file that is locked by another user!\n"
-            message += f"You will NOT be able to save your changes.\n\n"
-            message += f"Consider closing the file and coordinating with {locked_by}."
+            # Start collision animation
+            self.start_collision_animation()
             
-            # Show warning message
-            messagebox.showwarning(
-                "CAD Lock System - Editing Collision", 
-                message
+            # Force the popup to appear on top
+            root = tk.Tk()
+            root.withdraw()
+            root.lift()
+            root.attributes('-topmost', True)
+            root.attributes('-alpha', 0.0)  # Make invisible
+            root.focus_force()
+            
+            message = f"⚠️ COLLISION WARNING ⚠️\n\n"
+            message += f"You are editing: {filename}\n"
+            message += f"But it's locked by: {locked_by}\n"
+            message += f"Since: {locked_since}\n\n"
+            message += f"You may not be able to save your changes!\n"
+            message += f"Consider coordinating with {locked_by}."
+            
+            # Use a more aggressive popup method
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, 
+                message, 
+                "CAD Lock System - Collision Warning", 
+                0x30  # Warning icon + OK button
             )
             
             root.destroy()
             
-            self.log_message(f"COLLISION WARNING: {filename} locked by {locked_by}")
+            self.log_message(f"COLLISION WARNING SHOWN: {filename} locked by {locked_by}")
             
         except Exception as e:
             self.log_message(f"Error showing collision warning: {e}")
+            # Fallback to console alert
+            print(f"\n*** COLLISION WARNING ***")
+            print(f"File: {os.path.basename(file_path)}")
+            print(f"Locked by: {lock_info.get('user')}")
+            print("*************************\n")
+    
+    def start_collision_animation(self):
+        """Start animated icon for collision"""
+        if not self.collision_active:
+            self.collision_active = True
+            if self.animation_thread is None or not self.animation_thread.is_alive():
+                self.animation_thread = threading.Thread(target=self.animate_collision_icon, daemon=True)
+                self.animation_thread.start()
+    
+    def stop_collision_animation(self):
+        """Stop collision animation"""
+        self.collision_active = False
+    
+    def animate_collision_icon(self):
+        """Animate the tray icon during collision"""
+        flash_count = 0
+        while self.collision_active and flash_count < 6:  # Flash 3 times (6 state changes)
+            try:
+                if hasattr(self, 'tray_icon') and self.tray_icon:
+                    lock_count = self.get_my_lock_count()
+                    
+                    # Alternate between bright red and dark red
+                    if flash_count % 2 == 0:
+                        # Bright red flash
+                        image = Image.new('RGBA', (32, 32), (255, 0, 0, 255))
+                    else:
+                        # Dark red
+                        image = Image.new('RGBA', (32, 32), (150, 0, 0, 255))
+                    
+                    draw = ImageDraw.Draw(image)
+                    # White border
+                    draw.rectangle([0, 0, 31, 31], outline=(255, 255, 255, 255), width=2)
+                    # Draw "L" in center
+                    draw.rectangle([8, 8, 12, 24], fill=(255, 255, 255, 255))
+                    draw.rectangle([8, 20, 20, 24], fill=(255, 255, 255, 255))
+                    
+                    # Add exclamation mark for collision
+                    draw.rectangle([14, 8, 18, 20], fill=(255, 255, 255, 255))  # Exclamation line
+                    draw.rectangle([14, 22, 18, 24], fill=(255, 255, 255, 255))  # Exclamation dot
+                    
+                    self.tray_icon.icon = image
+                    self.tray_icon.title = "🚨 COLLISION DETECTED! 🚨"
+                
+                time.sleep(0.5)  # Flash every 0.5 seconds
+                flash_count += 1
+                
+            except Exception as e:
+                self.log_message(f"Error in collision animation: {e}")
+                break
+        
+        # After animation, set to solid red if collision still active
+        if self.collision_active:
+            self.update_icon(warning=True)
+    
+    def try_close_file_in_solidworks(self, file_path):
+        """Try to close the file in SolidWorks using COM automation"""
+        try:
+            import win32com.client
+            
+            # Try to connect to SolidWorks
+            sw = win32com.client.Dispatch("SldWorks.Application")
+            
+            # Get the active document
+            doc = sw.GetFirstDocument()
+            while doc:
+                doc_path = doc.GetPathName()
+                if doc_path.lower() == file_path.lower():
+                    # Close this document
+                    sw.CloseDoc(doc.GetTitle())
+                    self.log_message(f"Closed {os.path.basename(file_path)} in SolidWorks")
+                    break
+                doc = doc.GetNext()
+                
+        except Exception as e:
+            self.log_message(f"Could not close file in SolidWorks: {e}")
+            # This is expected if SolidWorks COM isn't available
     
     def check_for_collisions(self, open_files):
         """Check if any of my open files are locked by others"""
@@ -250,10 +340,122 @@ class SimpleCADTray:
         except Exception as e:
             self.log_message(f"Error releasing blocked files: {e}")
     
+    def protect_all_locked_files(self):
+        """Proactively protect all files that are locked by others"""
+        try:
+            if not os.path.exists(self.lock_dir):
+                return
+                
+            for lock_file in os.listdir(self.lock_dir):
+                if lock_file.endswith('.lock'):
+                    lock_path = os.path.join(self.lock_dir, lock_file)
+                    try:
+                        with open(lock_path, 'r') as f:
+                            lock_data = json.load(f)
+                        
+                        locked_by = lock_data.get('user')
+                        original_path = lock_data.get('original_path')
+                        
+                        # If file is locked by someone else and exists
+                        if (locked_by and locked_by != self.user and 
+                            original_path and os.path.exists(original_path)):
+                            
+                            # More aggressive: Move file to hidden location
+                            self.hide_locked_file(original_path, lock_data)
+                                    
+                    except Exception as e:
+                        self.log_message(f"Error processing lock file {lock_file}: {e}")
+                        
+        except Exception as e:
+            self.log_message(f"Error in protect_all_locked_files: {e}")
+    
+    def hide_locked_file(self, file_path, lock_data):
+        """Move locked file to hidden location to prevent access"""
+        try:
+            if not hasattr(self, 'hidden_files'):
+                self.hidden_files = {}
+            
+            # If already hidden, skip
+            if file_path in self.hidden_files:
+                return
+                
+            # Create hidden directory
+            hidden_dir = os.path.join(os.path.dirname(file_path), ".cad_lock_hidden")
+            os.makedirs(hidden_dir, exist_ok=True)
+            
+            # Move file to hidden location
+            filename = os.path.basename(file_path)
+            hidden_path = os.path.join(hidden_dir, filename)
+            
+            # If hidden file already exists, use timestamp suffix
+            if os.path.exists(hidden_path):
+                name, ext = os.path.splitext(filename)
+                timestamp = datetime.now().strftime("%H%M%S")
+                hidden_path = os.path.join(hidden_dir, f"{name}_{timestamp}{ext}")
+            
+            # Move the file
+            import shutil
+            shutil.move(file_path, hidden_path)
+            
+            # Track the move
+            self.hidden_files[file_path] = {
+                'hidden_path': hidden_path,
+                'locked_by': lock_data.get('user'),
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            self.log_message(f"HIDDEN: {filename} locked by {lock_data.get('user')} - moved to hidden location")
+            
+        except Exception as e:
+            self.log_message(f"Error hiding file {file_path}: {e}")
+    
+    def restore_hidden_files(self):
+        """Restore any hidden files when locks are released"""
+        try:
+            if not hasattr(self, 'hidden_files'):
+                return
+                
+            files_to_restore = []
+            
+            for original_path, hide_info in self.hidden_files.items():
+                # Check if file is still locked by someone else
+                lock_info = self.get_lock_info(original_path)
+                
+                if not lock_info or lock_info.get('user') == self.user:
+                    # Lock released or is ours now - restore file
+                    files_to_restore.append(original_path)
+            
+            # Restore files
+            for original_path in files_to_restore:
+                hide_info = self.hidden_files[original_path]
+                hidden_path = hide_info['hidden_path']
+                
+                try:
+                    if os.path.exists(hidden_path):
+                        import shutil
+                        shutil.move(hidden_path, original_path)
+                        self.log_message(f"RESTORED: {os.path.basename(original_path)} - lock released")
+                    
+                    del self.hidden_files[original_path]
+                    
+                except Exception as e:
+                    self.log_message(f"Error restoring {original_path}: {e}")
+                    
+        except Exception as e:
+            self.log_message(f"Error restoring hidden files: {e}")
+    
+    def restore_file_permissions(self, file_path):
+        """Restore normal file permissions"""
+        try:
+            import stat
+            os.chmod(file_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IRGRP | stat.S_IWGRP | stat.S_IROTH)
+            self.log_message(f"Restored permissions for {os.path.basename(file_path)}")
+        except Exception as e:
+            self.log_message(f"Error restoring permissions for {file_path}: {e}")
+    
     def check_for_collisions(self, open_files):
         """Check if any of my open files are locked by others"""
         collisions_found = False
-        current_collisions = set()
         
         for file_path in open_files:
             lock_info = self.get_lock_info(file_path)
@@ -264,38 +466,16 @@ class SimpleCADTray:
                 # If file is locked by someone else
                 if locked_by and locked_by != self.user:
                     filename = os.path.basename(file_path)
-                    current_collisions.add(file_path)
                     
-                    # Only warn once per file per session
-                    if file_path not in self.warned_files:
-                        self.show_collision_warning(file_path, lock_info)
-                        self.warned_files.add(file_path)
-                        collisions_found = True
-                        
-                        # Immediately try to block the file
-                        self.make_file_readonly_permanently(file_path, lock_info)
-                        
-                        # Show additional warning about saving
-                        self.show_save_prevention_warning(file_path, lock_info)
+                    # Show warning every time (remove the "warn once" limitation)
+                    self.show_collision_warning(file_path, lock_info)
+                    collisions_found = True
                     
                     self.log_message(f"COLLISION: {filename} locked by {locked_by}")
         
-        # Release blocks on files no longer in collision
-        if hasattr(self, 'blocked_files'):
-            for blocked_path in list(self.blocked_files.keys()):
-                if blocked_path not in current_collisions:
-                    try:
-                        handle = self.blocked_files[blocked_path]
-                        handle.close()
-                        del self.blocked_files[blocked_path]
-                        
-                        # Restore permissions
-                        import stat
-                        os.chmod(blocked_path, stat.S_IREAD | stat.S_IWRITE | stat.S_IRGRP | stat.S_IWGRP)
-                        
-                        self.log_message(f"Released block on {os.path.basename(blocked_path)} - no longer in collision")
-                    except:
-                        pass
+        # Stop animation if no more collisions
+        if not collisions_found and self.collision_active:
+            self.stop_collision_animation()
         
         return collisions_found
     
@@ -765,9 +945,12 @@ class SimpleCADTray:
             if hasattr(self, 'tray_icon') and self.tray_icon:
                 lock_count = self.get_my_lock_count()
                 self.tray_icon.icon = self.create_simple_icon(lock_count, warning)
-                title = f"CAD Locks: {lock_count} files"
+                
                 if warning:
-                    title += " ⚠️ COLLISION!"
+                    title = f"🚨 COLLISION! {lock_count} files locked 🚨"
+                else:
+                    title = f"CAD Locks: {lock_count} files"
+                    
                 self.tray_icon.title = title
         except Exception as e:
             print(f"Error updating icon: {e}")
@@ -778,15 +961,13 @@ class SimpleCADTray:
             self.monitor_running = True
             self.monitor_thread = threading.Thread(target=self.monitor_loop, daemon=True)
             self.monitor_thread.start()
-            self.start_file_watcher()  # Start save interception
-            self.log_message("Monitoring started with save interception")
+            self.log_message("Monitoring started with collision detection")
             self.update_icon()
     
     def stop_monitoring(self, icon=None, item=None):
         """Stop monitoring"""
         if self.monitor_running:
             self.monitor_running = False
-            self.stop_file_watcher()  # Stop save interception
             self.cleanup_my_locks()
             self.log_message("Monitoring stopped")
             self.update_icon()
@@ -799,9 +980,7 @@ class SimpleCADTray:
     def quit_app(self, icon=None, item=None):
         """Quit application"""
         self.log_message("Shutting down...")
-        self.release_blocked_files()  # Release any file blocks
         self.stop_monitoring()
-        self.stop_file_watcher()
         if hasattr(self, 'tray_icon'):
             self.tray_icon.stop()
     
