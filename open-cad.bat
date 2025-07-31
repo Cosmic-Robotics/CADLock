@@ -39,9 +39,11 @@ if "%INSTALL_DIR:~-1%"=="\" (
   set "INSTALL_PATH=%INSTALL_DIR%\main.py"
 )
 
-REM If a file is passed, open it using the Python script
-if not "%~1"=="" (
-  python "%INSTALL_PATH%" open "%~1"
-) else (
-  echo Usage: open-cad.bat "full\path\to\file.sldprt"
+REM If no file is passed, just open SolidWorks
+if "%~1"=="" (
+  start "" "%SOLIDWORKS_PATH%"
+  exit /b 0
 )
+
+REM If a file is passed, always check locks first
+python "%INSTALL_PATH%" open "%~1"

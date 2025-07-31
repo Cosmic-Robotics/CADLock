@@ -1,5 +1,10 @@
 # CAD Lock System - Quick Setup Guide
 right click and open with
+accept read only
+make sujre google drive is running
+intercept and block saves
+psutil pip install watchdog
+
 
 ## 📁 File Overview
 
